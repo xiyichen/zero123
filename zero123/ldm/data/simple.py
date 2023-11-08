@@ -24,6 +24,7 @@ import os, sys
 import webdataset as wds
 import math
 from torch.utils.data.distributed import DistributedSampler
+import pickle
 
 # Some hacky things to make experimentation easier
 def make_transform_multi_folder_data(paths, caption_files=None, **kwargs):
@@ -203,7 +204,9 @@ class ObjaverseDataModuleFromConfig(pl.LightningDataModule):
     def test_dataloader(self):
         return wds.WebLoader(ObjaverseData(root_dir=self.root_dir, total_view=self.total_view, validation=self.validation),\
                           batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
-
+def read_pickle(pkl_path):
+    with open(pkl_path, 'rb') as f:
+        return pickle.load(f)
 
 class ObjaverseData(Dataset):
     def __init__(self,
@@ -227,23 +230,26 @@ class ObjaverseData(Dataset):
             postprocess = instantiate_from_config(postprocess)
         self.postprocess = postprocess
         self.total_view = total_view
+        
+        if validation:
+            self.publishable_ids = [122, 212, 340, 344]
+            self.uids = []
+            for i in self.publishable_ids:
+                self.uids.append(f'{str(i).zfill(3)}/{str(6).zfill(2)}')
+            print('============= length of dataset %d =============' % len(self.uids))
+        else:
+            self.uids = read_pickle('/root/facescape_color_calibrated/uid_set.pkl')
+            print('============= length of dataset %d =============' % len(self.uids))
+        
+        self.data_dir = Path('/root/facescape_color_calibrated/')
 
         if not isinstance(ext, (tuple, list, ListConfig)):
             ext = [ext]
 
-        with open(os.path.join(root_dir, 'valid_paths.json')) as f:
-            self.paths = json.load(f)
-            
-        total_objects = len(self.paths)
-        if validation:
-            self.paths = self.paths[math.floor(total_objects / 100. * 99.):] # used last 1% as validation
-        else:
-            self.paths = self.paths[:math.floor(total_objects / 100. * 99.)] # used first 99% as training
-        print('============= length of dataset %d =============' % len(self.paths))
         self.tform = image_transforms
 
     def __len__(self):
-        return len(self.paths)
+        return len(self.uids)
         
     def cartesian_to_spherical(self, xyz):
         ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
@@ -285,37 +291,77 @@ class ObjaverseData(Dataset):
         return img
 
     def __getitem__(self, index):
+        try:
+            data_dir = os.path.join(self.data_dir, self.uids[index])
+            with open(os.path.join(data_dir, 'cameras.json'), 'r') as f:
+                camera_dict = json.load(f)
+            subject_id, expression_id = self.uids[index].split('/')
+            subject_id = str(int(subject_id))
+            expression_id = str(int(expression_id))
+            
+            valid_views = camera_dict.keys()
+            target_view_candidates = []
+            for valid_view in valid_views:
+                if abs(camera_dict[valid_view]['angles']['azimuth']) <= 90 and os.path.isfile(os.path.join(data_dir, f'view_{valid_view.zfill(5)}/rgba_colorcalib_v2.png')):
+                    target_view_candidates.append(valid_view)
+            assert len(target_view_candidates) >= 2
+        except:
+            data_dir = os.path.join(self.data_dir, '085/03')
+            with open(os.path.join(data_dir, 'cameras.json'), 'r') as f:
+                camera_dict = json.load(f)
+            subject_id, expression_id = self.uids[index].split('/')
+            subject_id = str(int(subject_id))
+            expression_id = str(int(expression_id))
+            
+            valid_views = camera_dict.keys()
+            target_view_candidates = []
+            for valid_view in valid_views:
+                if abs(camera_dict[valid_view]['angles']['azimuth']) <= 90 and os.path.isfile(os.path.join(data_dir, f'view_{valid_view.zfill(5)}/rgba_colorcalib_v2.png')):
+                    target_view_candidates.append(valid_view)
+        
+        cond_idx, target_idx = random.sample(target_view_candidates, 2)
+        color = [1., 1., 1., 1.]
+        
+        cond_RT = np.array(camera_dict[cond_idx]['extrinsics'])
+        cond_im = self.process_im(self.load_im(os.path.join(data_dir, f'view_{cond_idx.zfill(5)}/rgba_colorcalib_v2.png'), color))
+        target_RT = np.array(camera_dict[target_idx]['extrinsics'])
+        target_im = self.process_im(self.load_im(os.path.join(data_dir, f'view_{target_idx.zfill(5)}/rgba_colorcalib_v2.png'), color))
+        
+        
+        cam_rec = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
+        target_RT = cam_rec@target_RT
+        cond_RT = cam_rec@cond_RT
 
         data = {}
-        total_view = self.total_view
-        index_target, index_cond = random.sample(range(total_view), 2) # without replacement
-        filename = os.path.join(self.root_dir, self.paths[index])
+        # total_view = self.total_view
+        # index_target, index_cond = random.sample(range(total_view), 2) # without replacement
+        # filename = os.path.join(self.root_dir, self.paths[index])
 
-        # print(self.paths[index])
+        # # print(self.paths[index])
 
-        if self.return_paths:
-            data["path"] = str(filename)
+        # if self.return_paths:
+        #     data["path"] = str(filename)
         
-        color = [1., 1., 1., 1.]
+        # color = [1., 1., 1., 1.]
 
-        try:
-            target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
-            cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
-            target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
-            cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
-        except:
-            # very hacky solution, sorry about this
-            filename = os.path.join(self.root_dir, '692db5f2d3a04bb286cb977a7dba903e_1') # this one we know is valid
-            target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
-            cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
-            target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
-            cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
-            target_im = torch.zeros_like(target_im)
-            cond_im = torch.zeros_like(cond_im)
+        # try:
+        #     target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
+        #     cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
+        #     target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
+        #     cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
+        # except:
+        #     # very hacky solution, sorry about this
+        #     filename = os.path.join(self.root_dir, '692db5f2d3a04bb286cb977a7dba903e_1') # this one we know is valid
+        #     target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
+        #     cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
+        #     target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
+        #     cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
+        #     target_im = torch.zeros_like(target_im)
+        #     cond_im = torch.zeros_like(cond_im)
 
         data["image_target"] = target_im
         data["image_cond"] = cond_im
-        data["T"] = self.get_T(target_RT, cond_RT)
+        data["T"] = self.get_T(target_RT.reshape(3,4), cond_RT.reshape(3,4))
 
         if self.postprocess is not None:
             data = self.postprocess(data)

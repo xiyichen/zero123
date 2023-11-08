@@ -72,8 +72,8 @@ model:
 data:
   target: ldm.data.simple.ObjaverseDataModuleFromConfig
   params:
-    root_dir: 'views_whole_sphere'
-    batch_size: 192
+    root_dir: '/root/data/zero123_thuman_no_area_light'
+    batch_size: 40
     num_workers: 16
     total_view: 4
     train:
@@ -92,12 +92,12 @@ lightning:
   metrics_over_trainsteps_checkpoint: True
   modelcheckpoint:
     params:
-      every_n_train_steps: 5000
+      every_n_train_steps: 500
   callbacks:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 500
+        batch_frequency: 100
         max_images: 32
         increase_log_steps: False
         log_first_step: True
@@ -112,6 +112,6 @@ lightning:
 
   trainer:
     benchmark: True
-    val_check_interval: 5000000 # really sorry
+    val_check_interval: 1000
     num_sanity_val_steps: 0
     accumulate_grad_batches: 1
