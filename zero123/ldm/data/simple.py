@@ -238,10 +238,10 @@ class ObjaverseData(Dataset):
                 self.uids.append(f'{str(i).zfill(3)}/{str(6).zfill(2)}')
             print('============= length of dataset %d =============' % len(self.uids))
         else:
-            self.uids = read_pickle('/root/facescape_color_calibrated/uid_set.pkl')
+            self.uids = read_pickle('/root/data/facescape_color_calibrated/uid_set.pkl')
             print('============= length of dataset %d =============' % len(self.uids))
         
-        self.data_dir = Path('/root/facescape_color_calibrated/')
+        self.data_dir = Path('/root/data/facescape_color_calibrated/')
 
         if not isinstance(ext, (tuple, list, ListConfig)):
             ext = [ext]

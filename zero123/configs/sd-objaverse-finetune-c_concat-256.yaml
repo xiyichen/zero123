@@ -73,7 +73,7 @@ data:
   target: ldm.data.simple.ObjaverseDataModuleFromConfig
   params:
     root_dir: '/root/data/zero123_thuman_no_area_light'
-    batch_size: 40
+    batch_size: 32
     num_workers: 16
     total_view: 4
     train:

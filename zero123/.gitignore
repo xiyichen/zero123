@@ -21,3 +21,4 @@ datasets
 scratch/
 nohup_logs/
 ckpt/
+*.png
